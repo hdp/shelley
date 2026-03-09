@@ -5738,6 +5738,43 @@ svg {
   font-size: 0.75rem;
   color: var(--text-secondary);
   word-break: break-all;
+  min-height: 2rem;
+  display: flex;
+  align-items: center;
+}
+
+.endpoint-truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  display: block;
+}
+
+.endpoint-truncate:hover {
+  white-space: normal;
+  word-break: break-all;
+}
+
+.vertex-endpoint-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.vertex-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.vertex-input-row .form-input {
+  flex: 1;
+}
+
+.vertex-input-row .separator {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .model-presets {

@@ -14,6 +14,7 @@ import (
 	"shelley.exe.dev/llm/ant"
 	"shelley.exe.dev/llm/gem"
 	"shelley.exe.dev/llm/oai"
+	"shelley.exe.dev/llm/vertex"
 )
 
 // ModelAPI is the API representation of a model
@@ -113,8 +114,8 @@ func (s *Server) handleCreateModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate provider type
-	if req.ProviderType != "anthropic" && req.ProviderType != "openai" && req.ProviderType != "openai-responses" && req.ProviderType != "gemini" {
-		http.Error(w, "provider_type must be 'anthropic', 'openai', 'openai-responses', or 'gemini'", http.StatusBadRequest)
+	if req.ProviderType != "anthropic" && req.ProviderType != "openai" && req.ProviderType != "openai-responses" && req.ProviderType != "gemini" && req.ProviderType != "vertex" {
+		http.Error(w, "provider_type must be 'anthropic', 'openai', 'openai-responses', 'gemini', or 'vertex'", http.StatusBadRequest)
 		return
 	}
 
@@ -376,6 +377,30 @@ func (s *Server) handleTestModel(w http.ResponseWriter, r *http.Request) {
 				ModelName: req.ModelName,
 				URL:       req.Endpoint,
 			},
+		}
+	case "vertex":
+		// Vertex endpoint is in the format project_id:region
+		parts := strings.SplitN(req.Endpoint, ":", 2)
+		projectID := parts[0]
+		region := "global"
+		if len(parts) > 1 && parts[1] != "" {
+			region = parts[1]
+		}
+		var err error
+		service, err = vertex.NewServiceFromCredentialsFile(
+			req.APIKey,
+			projectID,
+			region,
+			vertex.PublisherGoogle,
+			req.ModelName,
+		)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": fmt.Sprintf("Failed to create vertex service: %v", err),
+			})
+			return
 		}
 	default:
 		http.Error(w, "Invalid provider_type", http.StatusBadRequest)

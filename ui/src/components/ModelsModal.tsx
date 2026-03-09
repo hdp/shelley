@@ -14,13 +14,14 @@ interface ModelsModalProps {
   onModelsChanged?: () => void;
 }
 
-type ProviderType = "anthropic" | "openai" | "openai-responses" | "gemini";
+type ProviderType = "anthropic" | "openai" | "openai-responses" | "gemini" | "vertex";
 
 const DEFAULT_ENDPOINTS: Record<ProviderType, string> = {
   anthropic: "https://api.anthropic.com/v1/messages",
   openai: "https://api.openai.com/v1",
   "openai-responses": "https://api.openai.com/v1",
   gemini: "https://generativelanguage.googleapis.com/v1beta",
+  vertex: ":global",
 };
 
 const PROVIDER_LABELS: Record<ProviderType, string> = {
@@ -28,6 +29,7 @@ const PROVIDER_LABELS: Record<ProviderType, string> = {
   openai: "OpenAI (Chat API)",
   "openai-responses": "OpenAI (Responses API)",
   gemini: "Google Gemini",
+  vertex: "Google Vertex AI",
 };
 
 const DEFAULT_MODELS: Record<ProviderType, { name: string; model_name: string }[]> = {
@@ -39,9 +41,19 @@ const DEFAULT_MODELS: Record<ProviderType, { name: string; model_name: string }[
   openai: [{ name: "GPT-5.2", model_name: "gpt-5.2" }],
   "openai-responses": [{ name: "GPT-5.2 Codex", model_name: "gpt-5.2-codex" }],
   gemini: [
-    { name: "Gemini 3 Pro", model_name: "gemini-3-pro-preview" },
-    { name: "Gemini 3 Flash", model_name: "gemini-3-flash-preview" },
+    { name: "Gemini 3 Pro Preview", model_name: "gemini-3-pro-preview" },
+    { name: "Gemini 3 Flash Preview", model_name: "gemini-3-flash-preview" },
+    { name: "Gemini 2.5 Pro", model_name: "gemini-2.5-pro" },
+    { name: "Gemini 2.5 Flash", model_name: "gemini-2.5-flash" },
+    { name: "Gemini 2.0 Flash Exp", model_name: "gemini-2.0-flash-exp" },
+    { name: "Gemini 2.0 Flash", model_name: "gemini-2.0-flash" },
+    { name: "Gemini 1.5 Pro", model_name: "gemini-1.5-pro" },
+    { name: "Gemini 1.5 Pro Latest", model_name: "gemini-1.5-pro-latest" },
+    { name: "Gemini 1.5 Flash", model_name: "gemini-1.5-flash" },
+    { name: "Gemini 1.5 Flash Latest", model_name: "gemini-1.5-flash-latest" },
   ],
+  // Vertex AI models are always effectively custom since we require BYOK
+  vertex: [],
 };
 
 // Built-in model info from init data
@@ -57,6 +69,9 @@ interface FormData {
   provider_type: ProviderType;
   endpoint: string;
   endpoint_custom: boolean;
+  vertex_endpoint_mode: "project-region" | "custom";
+  vertex_project: string;
+  vertex_region: string;
   api_key: string;
   model_name: string;
   max_tokens: number;
@@ -68,6 +83,9 @@ const emptyForm: FormData = {
   provider_type: "anthropic",
   endpoint: DEFAULT_ENDPOINTS.anthropic,
   endpoint_custom: false,
+  vertex_endpoint_mode: "project-region",
+  vertex_project: "",
+  vertex_region: "global",
   api_key: "",
   model_name: "",
   max_tokens: 200000,
@@ -121,19 +139,58 @@ function ModelsModal({ isOpen, onClose, onModelsChanged }: ModelsModalProps) {
   }, [isOpen, loadModels]);
 
   const handleProviderChange = (provider: ProviderType) => {
+    const isVertex = provider === "vertex";
     setForm((prev) => ({
       ...prev,
       provider_type: provider,
-      endpoint: prev.endpoint_custom ? prev.endpoint : DEFAULT_ENDPOINTS[provider],
+      endpoint_custom: isVertex ? false : prev.endpoint_custom,
+      vertex_endpoint_mode: isVertex ? "project-region" : prev.vertex_endpoint_mode,
+      vertex_project: isVertex ? "" : prev.vertex_project,
+      vertex_region: isVertex ? "global" : prev.vertex_region,
+      endpoint: isVertex
+        ? ":global"
+        : prev.endpoint_custom
+          ? prev.endpoint
+          : DEFAULT_ENDPOINTS[provider],
     }));
   };
 
   const handleEndpointModeChange = (custom: boolean) => {
-    setForm((prev) => ({
-      ...prev,
-      endpoint_custom: custom,
-      endpoint: custom ? prev.endpoint : DEFAULT_ENDPOINTS[prev.provider_type],
-    }));
+    setForm((prev) => {
+      if (prev.provider_type === "vertex") {
+        const mode = custom ? "custom" : "project-region";
+        const endpoint = custom
+          ? (prev.vertex_project && prev.vertex_region
+            ? constructVertexURL(prev.vertex_project, prev.vertex_region, prev.model_name || "gemini-3-flash-preview")
+            : "")
+          : `${prev.vertex_project || ""}:${prev.vertex_region || "global"}`;
+        return {
+          ...prev,
+          vertex_endpoint_mode: mode,
+          endpoint,
+        };
+      }
+      return {
+        ...prev,
+        endpoint_custom: custom,
+        endpoint: custom ? "" : DEFAULT_ENDPOINTS[prev.provider_type],
+      };
+    });
+  };
+
+  // Construct full Vertex AI endpoint URL from project/region
+  // Note: modelName should NOT include -vertex suffix (that's Shelley's internal ID)
+  const constructVertexURL = (project: string, region: string, modelName: string): string => {
+    // Strip -vertex suffix if present (Shelley's internal ID vs Google's actual model ID)
+    const googleModelName = modelName.replace(/-vertex$/, "");
+    if (!project) {
+      return "Enter a project ID to see the endpoint URL";
+    }
+    if (!region) {
+      return "Enter a region to see the endpoint URL";
+    }
+    const location = region;
+    return `https://${location}-aiplatform.googleapis.com/v1/projects/${project}/locations/${location}/publishers/google/models/${googleModelName}:streamGenerateContent`;
   };
 
   const handleSelectPresetModel = (preset: { name: string; model_name: string }) => {
@@ -186,6 +243,7 @@ function ModelsModal({ isOpen, onClose, onModelsChanged }: ModelsModalProps) {
 
     try {
       setError(null);
+
       const request: CreateCustomModelRequest = {
         display_name: form.display_name,
         provider_type: form.provider_type,
@@ -214,12 +272,34 @@ function ModelsModal({ isOpen, onClose, onModelsChanged }: ModelsModalProps) {
   };
 
   const handleEdit = (model: CustomModel) => {
+    // For vertex, detect mode from endpoint format
+    let vertex_endpoint_mode: "project-region" | "custom" = "project-region";
+    let vertex_project = "";
+    let vertex_region = "global";
+
+    if (model.provider_type === "vertex") {
+      const isCustom = model.endpoint.includes("googleapis.com");
+      if (isCustom) {
+        vertex_endpoint_mode = "custom";
+      } else {
+        // Parse project:region format (skip if it's just ":global" default)
+        if (model.endpoint && model.endpoint !== ":global") {
+          const parts = model.endpoint.split(":");
+          vertex_project = parts[0] || "";
+          vertex_region = parts[1] || "global";
+        }
+      }
+    }
+
     setEditingModelId(model.model_id);
     setForm({
       display_name: model.display_name,
       provider_type: model.provider_type,
       endpoint: model.endpoint,
-      endpoint_custom: model.endpoint !== DEFAULT_ENDPOINTS[model.provider_type],
+      endpoint_custom: model.provider_type === "vertex" ? vertex_endpoint_mode === "custom" : model.endpoint !== DEFAULT_ENDPOINTS[model.provider_type],
+      vertex_endpoint_mode,
+      vertex_project,
+      vertex_region,
       api_key: model.api_key,
       model_name: model.model_name,
       max_tokens: model.max_tokens,
@@ -303,50 +383,119 @@ function ModelsModal({ isOpen, onClose, onModelsChanged }: ModelsModalProps) {
             <div className="form-group">
               <label>{t("providerApiFormat")}</label>
               <div className="provider-buttons">
-                {(["anthropic", "openai", "openai-responses", "gemini"] as ProviderType[]).map(
-                  (p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      className={`provider-btn ${form.provider_type === p ? "selected" : ""}`}
-                      onClick={() => handleProviderChange(p)}
-                    >
-                      {PROVIDER_LABELS[p]}
-                    </button>
-                  ),
-                )}
+                {(
+                  ["anthropic", "openai", "openai-responses", "gemini", "vertex"] as ProviderType[]
+                ).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    className={`provider-btn ${form.provider_type === p ? "selected" : ""}`}
+                    onClick={() => handleProviderChange(p)}
+                  >
+                    {PROVIDER_LABELS[p]}
+                  </button>
+                ))}
               </div>
             </div>
 
             {/* Endpoint Selection */}
             <div className="form-group">
               <label>{t("endpoint")}</label>
-              <div className="endpoint-toggle">
-                <button
-                  type="button"
-                  className={`toggle-btn ${!form.endpoint_custom ? "selected" : ""}`}
-                  onClick={() => handleEndpointModeChange(false)}
-                >
-                  {t("defaultEndpoint")}
-                </button>
-                <button
-                  type="button"
-                  className={`toggle-btn ${form.endpoint_custom ? "selected" : ""}`}
-                  onClick={() => handleEndpointModeChange(true)}
-                >
-                  {t("customEndpoint")}
-                </button>
-              </div>
-              {form.endpoint_custom ? (
-                <input
-                  type="text"
-                  value={form.endpoint}
-                  onChange={(e) => setForm((prev) => ({ ...prev, endpoint: e.target.value }))}
-                  placeholder="https://..."
-                  className="form-input"
-                />
+              {form.provider_type === "vertex" ? (
+                <>
+                  <div className="endpoint-toggle">
+                    <button
+                      type="button"
+                      className={`toggle-btn ${form.vertex_endpoint_mode === "project-region" ? "selected" : ""}`}
+                      onClick={() => handleEndpointModeChange(false)}
+                    >
+                      Project / Region
+                    </button>
+                    <button
+                      type="button"
+                      className={`toggle-btn ${form.vertex_endpoint_mode === "custom" ? "selected" : ""}`}
+                      onClick={() => handleEndpointModeChange(true)}
+                    >
+                      Custom
+                    </button>
+                  </div>
+                  {form.vertex_endpoint_mode === "project-region" ? (
+                    <div className="vertex-endpoint-inputs">
+                      <div className="vertex-input-row">
+                        <input
+                          type="text"
+                          value={form.vertex_project}
+                          onChange={(e) => {
+                            setForm((prev) => ({
+                              ...prev,
+                              vertex_project: e.target.value,
+                              endpoint: `${e.target.value}:${prev.vertex_region}`,
+                            }));
+                          }}
+                          placeholder="Project ID"
+                          className="form-input"
+                        />
+                        <span className="separator">:</span>
+                        <input
+                          type="text"
+                          value={form.vertex_region}
+                          onChange={(e) => {
+                            setForm((prev) => ({
+                              ...prev,
+                              vertex_region: e.target.value,
+                              endpoint: `${prev.vertex_project}:${e.target.value}`,
+                            }));
+                          }}
+                          placeholder="Region"
+                          className="form-input"
+                        />
+                      </div>
+                      <div className="endpoint-display mt-2 endpoint-truncate">
+                        {form.vertex_endpoint_mode === "project-region"
+                          ? constructVertexURL(form.vertex_project, form.vertex_region, form.model_name || "gemini-3-flash-preview")
+                          : form.endpoint}
+                      </div>
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      value={form.endpoint}
+                      onChange={(e) => setForm((prev) => ({ ...prev, endpoint: e.target.value }))}
+                      placeholder="https://[location]-aiplatform.googleapis.com/v1/projects/[project]/locations/[location]/publishers/google/models/[model]:streamGenerateContent"
+                      className="form-input"
+                    />
+                  )}
+                </>
               ) : (
-                <div className="endpoint-display">{form.endpoint}</div>
+                <>
+                  <div className="endpoint-toggle">
+                    <button
+                      type="button"
+                      className={`toggle-btn ${!form.endpoint_custom ? "selected" : ""}`}
+                      onClick={() => handleEndpointModeChange(false)}
+                    >
+                      {t("defaultEndpoint")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`toggle-btn ${form.endpoint_custom ? "selected" : ""}`}
+                      onClick={() => handleEndpointModeChange(true)}
+                    >
+                      {t("customEndpoint")}
+                    </button>
+                  </div>
+                  {form.endpoint_custom ? (
+                    <input
+                      type="text"
+                      value={form.endpoint}
+                      onChange={(e) => setForm((prev) => ({ ...prev, endpoint: e.target.value }))}
+                      placeholder="https://..."
+                      className="form-input"
+                    />
+                  ) : (
+                    <div className="endpoint-display">{form.endpoint}</div>
+                  )}
+                </>
               )}
             </div>
 
@@ -388,12 +537,18 @@ function ModelsModal({ isOpen, onClose, onModelsChanged }: ModelsModalProps) {
 
             {/* API Key */}
             <div className="form-group">
-              <label>{t("apiKey")}</label>
+              <label>
+                {form.provider_type === "vertex" ? "Account Credentials (path)" : t("apiKey")}
+              </label>
               <input
                 type="text"
                 value={form.api_key}
                 onChange={(e) => setForm((prev) => ({ ...prev, api_key: e.target.value }))}
-                placeholder={t("enterApiKey")}
+                placeholder={
+                  form.provider_type === "vertex"
+                    ? "/path/to/credentials.json"
+                    : t("enterApiKey")
+                }
                 className="form-input"
                 autoComplete="off"
               />
